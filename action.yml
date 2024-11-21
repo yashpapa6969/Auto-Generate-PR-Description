@@ -1,4 +1,4 @@
-name: Auto-Generate PR Description
+name: Auto-Generate Pull Request Summary
 description: 'Automatically generates and updates PR descriptions with commit logs and version tracking'
 author: 'yashpapa6969'
 
