@@ -1,0 +1,113 @@
+name: Auto-Generate PR Description
+description: 'Automatically generates and updates PR descriptions with commit logs and version tracking'
+author: 'yashpapa6969'
+
+branding:
+  icon: 'git-pull-request'
+  color: 'blue'
+
+inputs:
+  github_token:
+    description: 'GitHub token for API access'
+    required: true
+    default: '${{ github.token }}'
+  base_branch:
+    description: 'Base branch to track PRs against'
+    required: false
+    default: 'dev'
+  team_branch:
+    description: 'Team branch name to filter PRs'
+    required: false
+    default: 'Team'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Debug Repository and PR Context
+      run: |
+        echo "Repository: ${{ github.repository }}"
+        echo "PR Number: ${{ github.event.pull_request.number }}"
+
+    - name: Generate PR Description
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        REPO_NAME: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        BASE_BRANCH: ${{ inputs.base_branch }}
+        TEAM_BRANCH: ${{ inputs.team_branch }}
+      run: |
+        # Exit if PR number is missing
+        if [[ -z "$PR_NUMBER" ]]; then
+          echo "Error: Missing PR context."
+          exit 1
+        fi
+
+        # Get the current version with better error handling
+        CURRENT_VERSION=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+          "https://api.github.com/repos/$REPO_NAME/releases/latest" \
+          | jq -r '.tag_name // empty' | sed 's/^v//')
+
+        # If no version exists or version is invalid, start with 0.0.1
+        if [[ -z "$CURRENT_VERSION" || ! $CURRENT_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          CURRENT_VERSION="0.0.1"
+        fi
+
+        # Split version into components
+        IFS='.' read -r major minor patch <<< "$CURRENT_VERSION"
+
+        # Always increment patch version for new releases
+        NEW_VERSION="${major}.${minor}.$((patch + 1))"
+
+        # Update PR title if it's being merged
+        if [[ "${{ github.event.pull_request.merged }}" == "true" ]]; then
+          NEW_TITLE="Release v${NEW_VERSION} 🚀 #${PR_NUMBER}"
+          curl -X PATCH -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$REPO_NAME/pulls/$PR_NUMBER" \
+            -d "{\"title\":\"$NEW_TITLE\"}"
+        fi
+
+        # Fetch commits from the pull request
+        echo "Fetching commits for PR #$PR_NUMBER in $REPO_NAME"
+        COMMIT_LOGS=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+          "https://api.github.com/repos/$REPO_NAME/pulls/$PR_NUMBER/commits" \
+          | jq -r '.[] | "- [\(.sha[0:7])](https://github.com/'$REPO_NAME'/commit/\(.sha)): \(.commit.message | split("\n")[0])"')
+
+        # Create PR description file
+        echo "### Change Logs" > pr_description.txt
+        echo "" >> pr_description.txt
+        echo "$COMMIT_LOGS" >> pr_description.txt
+
+    - name: Update PR Description
+      if: ${{ github.event_name == 'pull_request' && github.event.action != 'closed' }}
+      run: |
+        # Get the first comment ID
+        FIRST_COMMENT=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+          | jq -r 'first')
+
+        # Read and escape the PR description for JSON
+        PR_BODY=$(cat pr_description.txt | jq -Rs .)
+
+        if [[ "$FIRST_COMMENT" == "null" ]]; then
+          # No comments exist, create the first one
+          curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            -d "{\"body\": $PR_BODY}"
+        else
+          # Update the first comment
+          COMMENT_ID=$(echo "$FIRST_COMMENT" | jq -r '.id')
+          curl -X PATCH -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/${{ github.repository }}/issues/comments/$COMMENT_ID" \
+            -d "{\"body\": $PR_BODY}"
+        fi
+
+    - name: Handle Closed PR
+      if: ${{ github.event_name == 'pull_request' && github.event.action == 'closed' }}
+      run: |
+        echo "Pull request #${{ github.event.pull_request.number }} has been closed."

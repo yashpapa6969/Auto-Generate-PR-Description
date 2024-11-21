@@ -1,0 +1,28 @@
+name: Auto PR Description Generator
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches:
+      - main
+      - dev
+
+jobs:
+  generate-pr-description:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Generate PR Description
+        uses: yashpapa6969/Auto-Generate-PR-Description@main
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          base_branch: 'dev'
+          team_branch: 'Team'
